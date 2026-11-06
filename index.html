@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#F4F3EB"><style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#F4F3EB"><style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,sans-serif}img{max-width:100%}[hidden]{display:none!important}.toc button:disabled{opacity:.6;cursor:default}
+.ctrl.locked{padding:12px 18px}
+</style>
 <title>2027 유럽비전트립 · 부모님 함께 보기</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Serif+KR:wght@700&display=swap">
@@ -304,23 +306,18 @@ var S = [
 ];
 
 /* ---------- state ---------- */
-var LIVE = 0;
-try { LIVE = Math.max(0, Math.min(S.length-1, JSON.parse(document.getElementById("live").textContent).slide|0)); } catch(e) {}
-var KEY = "evt-follow-v1";
+var TOPIC = "dongnae-evt2027-8ca9ea3c1cfd6af1";
+var RELAY = "https://ntfy.sh/" + TOPIC;
+var PKEY = "#pastor-57add136";
+var KEY = "evt-sync-v2";
 var saved = {};
 try { saved = JSON.parse(sessionStorage.getItem(KEY) || "{}") || {}; } catch(e) { saved = {}; }
-var presenter = false;
-var mode = "free";
-var idx = typeof saved.idx === "number" ? saved.idx : 0;
-if (presenter && typeof saved.pidx === "number" && saved.pidx !== LIVE && saved.pending) idx = saved.pidx; else if (presenter) idx = LIVE;
-var lastShown = typeof saved.shown === "number" ? saved.shown : idx;
-var artifactApi = null, publishTimer = null, readOnly = false;
-
-function save(extra){
-  var o = {mode: mode === "present" ? "follow" : mode, idx: idx, shown: idx, presenter: presenter};
-  if (extra) for (var k in extra) o[k] = extra[k];
-  try { sessionStorage.setItem(KEY, JSON.stringify(o)); } catch(e) {}
-}
+var presenter = location.hash === PKEY;
+var unlocked = false;          /* true after the pastor allows free browsing */
+var idx = typeof saved.idx === "number" ? Math.max(0, Math.min(S.length-1, saved.idx)) : 0;
+var connected = false;
+function mode(){ return presenter ? "present" : (unlocked ? "free" : "follow"); }
+function save(){ try { sessionStorage.setItem(KEY, JSON.stringify({idx: idx})); } catch(e) {} }
 
 /* ---------- shell ---------- */
 var app = document.getElementById("app");
@@ -328,7 +325,7 @@ app.innerHTML =
  '<header class="top"><span class="brand">I AM CHURCH</span><div class="secs" id="secs"></div><button class="menu" id="menuBtn" aria-label="목차 열기">목차</button></header>'+
  '<div class="progress"><i id="prog"></i></div>'+
  '<main class="stage" id="stage" aria-live="polite"></main>'+
- '<div class="dock"><button class="back" id="backBtn" hidden>발표 위치로 돌아가기</button>'+
+ '<div class="dock">'+
  '<div class="ctrl" id="ctrl"><div class="status"><span class="st"><i class="dot" id="dot"></i><span id="stText"></span></span><span class="pg" id="pg"></span></div>'+
  '<button class="nav" id="prevBtn" aria-label="이전 화면"><svg viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></button>'+
  '<button class="nav next" id="nextBtn" aria-label="다음 화면"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div></div>';
@@ -365,7 +362,7 @@ function render(dir){
 }
 
 function chrome(){
-  var s = S[idx];
+  var s = S[idx], m = mode();
   var secs = document.getElementById("secs"), h = "";
   SECTIONS.forEach(function(x){
     h += x.n === s.sec ? '<span class="sec on"><b>'+x.n+'</b>'+x.name+'</span>' : '<span class="sec">'+x.n+'</span>';
@@ -374,75 +371,90 @@ function chrome(){
   document.getElementById("prog").style.width = ((idx+1)/S.length*100) + "%";
   document.getElementById("pg").textContent = (idx+1) + " / " + S.length + " · " + s.title;
   var dot = document.getElementById("dot"), st = document.getElementById("stText"), ctrl = document.getElementById("ctrl");
-  ctrl.classList.toggle("pres", mode === "present");
-  dot.className = "dot" + (mode === "free" ? " free" : mode === "present" ? " pres" : "");
-  st.textContent = mode === "present" ? "발표자 모드 · 넘기면 모두 함께 넘어갑니다" : mode === "free" ? "옆으로 밀거나 버튼으로 넘겨 보세요" : "발표 따라가는 중";
-  document.getElementById("backBtn").hidden = true;
+  ctrl.classList.toggle("pres", m === "present");
+  ctrl.classList.toggle("locked", m === "follow");
+  dot.className = "dot" + (m === "present" ? " pres" : (!connected || m === "free") ? " free" : "");
+  if (m === "present") st.textContent = connected ? "발표자 · 넘기면 모두 함께 넘어갑니다" : "발표자 · 연결 중…";
+  else if (m === "free") st.textContent = "발표가 끝났습니다 · 자유롭게 넘겨 보세요";
+  else st.textContent = connected ? "목사님 화면을 따라가는 중" : "발표 화면에 연결하는 중…";
+  var showNav = m !== "follow";
+  document.getElementById("prevBtn").hidden = !showNav;
+  document.getElementById("nextBtn").hidden = !showNav;
   document.getElementById("prevBtn").disabled = idx === 0;
   document.getElementById("nextBtn").disabled = idx === S.length-1;
 }
 
-function go(n, byUser){
-  n = Math.max(0, Math.min(S.length-1, n));
-  if (n === idx) return;
+function show(n){
+  n = Math.max(0, Math.min(S.length-1, n|0));
+  if (n === idx) { chrome(); return; }
   var dir = n > idx ? 1 : -1;
-  idx = n;
-  if (byUser && mode === "follow") mode = "free";
-  render(dir);
-  if (mode === "present") queuePublish();
+  idx = n; render(dir);
 }
 
-/* ---------- presenter publish ---------- */
-var RESET = ':root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,sans-serif}img{max-width:100%}[hidden]{display:none!important}';
-function buildDoc(slide){
-  var SC = "scr" + "ipt";
-  return '<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>' + RESET + '</style></head><body>' +
-    '<title>2027 유럽비전트립 · 부모님 함께 보기</title>\n<meta name="claude:viewport-fit-sides" content="cover">\n' +
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Serif+KR:wght@700&display=swap">\n' +
-    document.getElementById("css").outerHTML + '\n<div id="app"></div>\n' +
-    '<' + SC + ' id="live" type="application/json">' + JSON.stringify({slide: slide}) + '</' + SC + '>\n' +
-    document.getElementById("main").outerHTML + '</body></html>';
-}
 function toast(msg){
   var t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
   document.body.appendChild(t); setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 3200);
 }
-function queuePublish(){
-  save({pidx: idx, pending: true});
-  clearTimeout(publishTimer);
-  publishTimer = setTimeout(doPublish, 700);
+
+/* ---------- relay (ntfy.sh) ---------- */
+function apply(msg){
+  var d; try { d = JSON.parse(msg); } catch(e) { return; }
+  if (!d || typeof d.s !== "number") return;
+  if (presenter) return;
+  var wasFree = unlocked;
+  unlocked = d.free === true;
+  if (unlocked && !wasFree) toast("발표가 끝났습니다. 이제 자유롭게 넘겨 보세요.");
+  if (!unlocked) show(d.s); else chrome();
 }
-function doPublish(){
-  if (readOnly) return;
-  if (!artifactApi) { toast("연결 중입니다. 잠시 후 다시 넘겨 주세요."); return; }
-  var target = idx;
-  artifactApi.publish(buildDoc(target)).then(function(){
-    save({pidx: target, pending: false});
-  }, function(err){
-    var code = err && err.code;
-    if (code === "conflict") return;
-    if (code === "not_writer" || code === "not_granted" || code === "capability_disabled") {
-      readOnly = true; presenter = false; mode = "follow"; save({presenter:false, pending:false});
-      toast("발표자 모드는 화면을 수정할 수 있는 사람만 쓸 수 있습니다.");
-      idx = LIVE; render(0); return;
-    }
-    if (code === "rate_limited") { toast("너무 빨리 넘겼습니다. 잠시 후 다시 넘겨 주세요."); return; }
-    toast("화면을 함께 넘기지 못했습니다. 다시 넘겨 주세요.");
+function fetchLatest(){
+  return fetch(RELAY + "/json?poll=1&since=latest").then(function(r){ return r.text(); }).then(function(t){
+    var lines = t.trim().split("\n"), last = null;
+    lines.forEach(function(l){ try { var o = JSON.parse(l); if (o.event === "message") last = o; } catch(e) {} });
+    return last ? last.message : null;
   });
 }
-if (window.claude && window.claude.use) {
-  window.claude.use("artifact").then(function(a){ artifactApi = a; }, function(){});
+function subscribe(){
+  if (!window.EventSource) return;
+  var es = new EventSource(RELAY + "/sse");
+  es.onopen = function(){ connected = true; chrome(); };
+  es.onerror = function(){ connected = false; chrome(); };
+  es.onmessage = function(e){
+    connected = true;
+    try { var o = JSON.parse(e.data); if (o.event === "message") apply(o.message); } catch(err) {}
+  };
+}
+var sendTimer = null, freeSent = false;
+function send(){
+  clearTimeout(sendTimer);
+  sendTimer = setTimeout(function(){
+    fetch(RELAY, {method: "POST", body: JSON.stringify({s: idx, free: freeSent})})
+      .then(function(r){ if (!r.ok) throw r; connected = true; chrome(); })
+      .catch(function(){ connected = false; chrome(); toast("신호를 보내지 못했습니다. 인터넷 연결을 확인하고 다시 넘겨 주세요."); });
+  }, 250);
+}
+function go(n){
+  var m = mode();
+  if (m === "follow") return;
+  n = Math.max(0, Math.min(S.length-1, n));
+  if (n === idx) return;
+  show(n);
+  if (m === "present") send();
 }
 
 /* ---------- index sheet ---------- */
 function openSheet(){
+  var m = mode();
   var sh = document.createElement("div"); sh.className = "sheet";
   var h = '<div class="panel" role="dialog" aria-label="목차"><div class="panel-h"><small>INDEX</small><button class="x" aria-label="닫기">×</button></div><h3 style="font-size:20px">2027 유럽비전트립 · 함께 보기</h3>';
+  if (m === "follow") h += '<p style="font-size:13px;margin-top:6px">발표 중에는 목사님이 넘기는 화면을 함께 봅니다. 발표가 끝나면 원하는 화면을 골라 보실 수 있습니다.</p>';
   SECTIONS.forEach(function(x){
     h += '<div class="toc-sec">' + x.n + ' · ' + x.name + '</div><div class="toc">';
-    S.forEach(function(s, i){ if (s.sec === x.n) h += '<button data-i="'+i+'" class="'+(i===idx?'cur ':'')+('')+'"><i>'+String(i+1).padStart(2,"0")+'</i>'+s.title+'</button>'; });
+    S.forEach(function(s, i){ if (s.sec === x.n) h += '<button data-i="'+i+'" class="'+(i===idx?'cur':'')+'"'+(m==="follow"?' disabled':'')+'><i>'+String(i+1).padStart(2,"0")+'</i>'+s.title+'</button>'; });
     h += '</div>';
   });
+  if (m === "present") {
+    h += '<div class="pres-box"><p>' + (freeSent ? "지금 부모님이 자유롭게 넘겨 보실 수 있습니다." : "지금 부모님 화면은 잠겨 있고, 목사님이 넘길 때만 넘어갑니다.") + '</p><button class="pres-btn" id="freeToggle">' + (freeSent ? "다시 잠그고 내 화면 따라오게 하기" : "발표 마치기 · 자유롭게 보기 허용") + '</button></div>';
+  }
   h += '</div>';
   sh.innerHTML = h;
   document.body.appendChild(sh);
@@ -450,11 +462,10 @@ function openSheet(){
   sh.addEventListener("click", function(e){
     if (e.target === sh || e.target.classList.contains("x")) return close();
     var b = e.target.closest("button[data-i]");
-    if (b) { close(); go(+b.getAttribute("data-i"), true); return; }
-    if (e.target.id === "presToggle") {
-      close();
-      if (mode === "present") { presenter = false; mode = "follow"; idx = LIVE; render(0); save({presenter:false, pending:false}); }
-      else { presenter = true; readOnly = false; mode = "present"; save({presenter:true}); chrome(); queuePublish(); toast("발표자 모드를 켰습니다."); }
+    if (b && !b.disabled) { close(); go(+b.getAttribute("data-i")); return; }
+    if (e.target.id === "freeToggle") {
+      freeSent = !freeSent; close(); send();
+      toast(freeSent ? "부모님 화면 잠금을 풀었습니다." : "부모님 화면을 다시 잠갔습니다.");
     }
   });
   sh.querySelector(".x").focus();
@@ -462,37 +473,35 @@ function openSheet(){
 
 /* ---------- input ---------- */
 document.getElementById("menuBtn").addEventListener("click", openSheet);
-document.getElementById("prevBtn").addEventListener("click", function(){ go(idx-1, true); });
-document.getElementById("nextBtn").addEventListener("click", function(){ go(idx+1, true); });
-document.getElementById("backBtn").addEventListener("click", function(){
-  var d = LIVE > idx ? 1 : LIVE < idx ? -1 : 0;
-  idx = LIVE; mode = "follow"; render(d);
-});
+document.getElementById("prevBtn").addEventListener("click", function(){ go(idx-1); });
+document.getElementById("nextBtn").addEventListener("click", function(){ go(idx+1); });
 document.addEventListener("keydown", function(e){
   if (document.querySelector(".sheet")) { if (e.key === "Escape") { var s = document.querySelector(".sheet"); s.parentNode.removeChild(s); } return; }
-  if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") { e.preventDefault(); go(idx+1, true); }
-  else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); go(idx-1, true); }
-  else if (e.key === "Home") go(0, true);
-  else if (e.key === "End") go(S.length-1, true);
+  if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") { e.preventDefault(); go(idx+1); }
+  else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); go(idx-1); }
 });
 var tx = null, ty = null;
 stage.addEventListener("touchstart", function(e){ var t = e.touches[0]; tx = t.clientX; ty = t.clientY; }, {passive:true});
 stage.addEventListener("touchend", function(e){
   if (tx === null) return;
   var t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty; tx = null;
-  if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.4) go(idx + (dx < 0 ? 1 : -1), true);
+  if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.4) go(idx + (dx < 0 ? 1 : -1));
 }, {passive:true});
 
-/* first paint: in follow mode, slide in from where this viewer last was */
-var firstDir = (mode !== "free" && lastShown !== idx) ? (idx > lastShown ? 1 : -1) : 0;
-if (firstDir) {
-  var keep = idx; idx = lastShown; render(0); idx = keep;
-  setTimeout(function(){ render(firstDir); }, 60);
-  if (mode === "follow") setTimeout(function(){ toast((idx+1) + "번째 화면으로 함께 넘어왔습니다"); }, 200);
-} else {
-  render(0);
-}
+document.addEventListener("visibilitychange", function(){
+  if (document.visibilityState === "visible" && !presenter) fetchLatest().then(function(m){ if (m) apply(m); }).catch(function(){});
+});
+/* ---------- start ---------- */
+render(0);
+fetchLatest().then(function(m){
+  if (m) {
+    if (presenter) {
+      try { var d = JSON.parse(m); if (typeof d.s === "number") { freeSent = d.free === true; show(d.s); } } catch(e) {}
+    } else apply(m);
+  }
+  connected = true; chrome();
+}).catch(function(){ chrome(); }).then(function(){ if (!presenter) subscribe(); });
+if (presenter) toast("발표자 모드입니다. 넘기는 화면이 부모님 휴대폰에도 나타납니다.");
 })();
 </script>
-
 </body></html>
